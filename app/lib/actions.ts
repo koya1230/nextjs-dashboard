@@ -9,80 +9,104 @@ const sql = postgres(process.env.POSTGRES_URL!, { ssl: "require" });
 
 const FormSchema = z.object({
   id: z.string(),
-  customerId: z.string(),
-  amount: z.coerce.number(),
-  status: z.enum(["pending", "paid"]),
+  customerId: z.string({
+    message: "Please select a customer.",
+  }),
+  amount: z.coerce
+    .number()
+    .gt(0, { message: "Please enter an amount greater than $0." }),
+  status: z.enum(["pending", "paid"], {
+    message: "Please select an invoice status.",
+  }),
   date: z.string(),
 });
 
-const CreateInvoice = FormSchema.omit({ id: true, date: true });
-const UpdateInvoice = FormSchema.omit({id: true, date:true});
+export type State = {
+  errors?: {
+    customerId?: string[];
+    amount?: string[];
+    status?: string[];
+  };
+  message?: string | null;
+};
 
-export async function createInvoice(formData: FormData) {
-  const { customerId, amount, status } = CreateInvoice.parse({
+const CreateInvoice = FormSchema.omit({ id: true, date: true });
+const UpdateInvoice = FormSchema.omit({ id: true, date: true });
+
+export async function createInvoice(prevState: State, formData: FormData) {
+  // ① 検査する(不合格でもエラーを投げない)
+  const validatedFields = CreateInvoice.safeParse({
     customerId: formData.get("customerId"),
     amount: formData.get("amount"),
     status: formData.get("status"),
   });
+
+  // ② 不合格なら、欄ごとのエラーを返して終わり
+  if (!validatedFields.success) {
+    return {
+      errors: validatedFields.error.flatten().fieldErrors,
+      message: "Missing Fields. Failed to Create Invoice.",
+    };
+  }
+
+  // ③ 合格なら、整えた値を取り出す
+  const { customerId, amount, status } = validatedFields.data;
   const amountInCents = amount * 100;
   const date = new Date().toISOString().split("T")[0];
 
-  try{
+  // ④ データベースに入れる(第12章の try/catch)
+  try {
     await sql`
-    INSERT INTO invoices (customer_id, amount, status, date)
-    VALUES (${customerId},${amountInCents},${status},${date})
+      INSERT INTO invoices (customer_id, amount, status, date)
+      VALUES (${customerId}, ${amountInCents}, ${status}, ${date})
     `;
-  }catch (error){
-    console.error(error);
-    return {message:'Database Error: Failed to Create Invoice.'};
+  } catch (error) {
+    return {
+      message: "Database Error: Failed to Create Invoice.",
+    };
   }
 
-  revalidatePath('/dashboard/invoices');
-  redirect('/dashboard/invoices');
-
-  //エラー対応前
-  // await sql`
-  //   INSERT INTO invoices (customer_id, amount, status, date)
-  //   VALUES (${customerId}, ${amountInCents}, ${status}, ${date})
-  // `;
-
-  // revalidatePath("/dashboard/invoices");
-  // redirect("/dashboard/invoices");
+  // ⑤ 成功したら一覧へ
+  revalidatePath("/dashboard/invoices");
+  redirect("/dashboard/invoices");
 }
 
-export async function updateInvoice(id: string, formData: FormData) {
-  const { customerId, amount, status } = UpdateInvoice.parse({
-    customerId: formData.get('customerId'),
-    amount: formData.get('amount'),
-    status: formData.get('status'),
+export async function updateInvoice(
+  id: string,
+  prevState: State,
+  formData: FormData
+) {
+  const validatedFields = UpdateInvoice.safeParse({
+    customerId: formData.get("customerId"),
+    amount: formData.get("amount"),
+    status: formData.get("status"),
   });
 
+  if (!validatedFields.success) {
+    return {
+      errors: validatedFields.error.flatten().fieldErrors,
+      message: "Missing Fields. Failed to Update Invoice.",
+    };
+  }
+
+  const { customerId, amount, status } = validatedFields.data;
   const amountInCents = amount * 100;
 
-  try{
+  try {
     await sql`
       UPDATE invoices
-    SET customer_id = ${customerId}, amount = ${amountInCents}, status = ${status}
-    WHERE id = ${id}
+      SET customer_id = ${customerId}, amount = ${amountInCents}, status = ${status}
+      WHERE id = ${id}
     `;
-  }catch(error){
-    console.error(error);
-    return {message: 'Database Error: Failed to Update Invoice.'}
+  } catch (error) {
+    return { message: "Database Error: Failed to Update Invoice." };
   }
-  revalidatePath('/dashboard/invoices');
-  redirect('/dashboard/invoices');
-  // await sql`
-  //   UPDATE invoices
-  //   SET customer_id = ${customerId}, amount = ${amountInCents}, status = ${status}
-  //   WHERE id = ${id}
-  // `;
 
-  // revalidatePath('/dashboard/invoices');
-  // redirect('/dashboard/invoices');
+  revalidatePath("/dashboard/invoices");
+  redirect("/dashboard/invoices");
 }
 
 export async function deleteInvoice(id: string) {
-
   await sql`DELETE FROM invoices WHERE id = ${id} `;
-  revalidatePath('/dashboard/invoices');
+  revalidatePath("/dashboard/invoices");
 }
